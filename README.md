@@ -269,9 +269,6 @@ This indicates:
 	address in the "load_balancer" record
     - where do ports come from?  my notes say registration.ports or fallback to
       registration.service.service.port.
-    - look for usages of the various host record types in Binder to see if there
-      are any semantics that I'm missing
-    - update Binder documentation
 -->
 
 
@@ -356,41 +353,69 @@ instances.)  In this example, that includes two instances:
 * a2674d3b-a9c4-46bc-a835-b6ce21d522c2
 * a4ae094d-da07-4911-94f9-c982dc88f3cc
 
-<!-- 
-    XXX raw output:
-    [a2674d3b-a9c4-46bc-a835-b6ce21d522c2, a4ae094d-da07-4911-94f9-c982dc88f3cc]
--->
+Binder also fetches the contents of the child nodes.  These records look like
+this:
 
-Binder also fetches the contents of these nodes, which look like this:
+    {
+      "type": "redis_host",
+      "address": "172.27.10.62",
+      "ttl": 30,
+      "redis_host": {
+        "address": "172.27.10.62",
+        "ports": [ 6379 ]
+      }
+    }
 
-<!-- XXX example host record -->
+    {
+      "type": "redis_host",
+      "address": "172.27.10.67",
+      "ttl": 30,
+      "redis_host": {
+        "address": "172.27.10.67",
+        "ports": [ 6379 ]
+      }
+    }
 
-<!-- XXX what this record indicates -->
+<!-- XXX which IP address is used? -->
 
+The record includes the IP address of the instance and TTLs for the DNS answers.
 This information allows Binder to answer queries for "A" records.  "A" records
 identify the IPv4 addresses associated with a DNS name.  In this case, there are
 two addresses for `authcache.emy-10.joyent.us`:
 
-<!-- XXX example DNS result -->
+    $ dig authcache.emy-10.joyent.us
+    ...
+    ;; QUESTION SECTION:
+    ;authcache.emy-10.joyent.us.    IN      A
+
+    ;; ANSWER SECTION:
+    authcache.emy-10.joyent.us. 30  IN      A       172.27.10.62
+    authcache.emy-10.joyent.us. 30  IN      A       172.27.10.67
 
 In order to use these, clients need to know the TCP port that the `authcache`
 service uses.
 
 Note that clients can also query for the host records directly:
 
-<!-- XXX example DNS result -->
+    $ dig a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us
+    ...
+    ;; QUESTION SECTION:
+    ;a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us. IN A
+
+    ;; ANSWER SECTION:
+    a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us. 30 IN A 172.27.10.62
 
 In this case, Binder answers the query by fetching the ZooKeeper node
 `/us/joyent/emy-10/authcache/a2674d3b-a9c4-46bc-a835-b6ce21d522c2`, finding the
 host record there, and producing an "A" record.
 
 When service or host records include port information (as above), Binder can
-also answer queries for "SRV" records.  "SRV" records identify not just IP
-addresses, but also TCP ports for multiple servers listening on the same IP
-address.  These are used for situations where multiple processes (usually Node
-programs) are listening in the same zone.  For example, in modern Triton
-deployments, the `moray.emy-10.joyent.us` domain provides SRV recors for each of
-the instances within each Moray zone:
+also answer DNS "SRV queries.  "SRV" answers identify not just IP addresses, but
+also TCP ports for multiple servers listening on the same IP address.  These are
+used for situations where multiple processes (usually Node programs) are
+listening in the same zone.  For example, in modern Triton deployments, the
+`moray.emy-10.joyent.us` domain provides SRV recors for each of the instances
+within each Moray zone:
 
 <!-- XXX example DNS result -->
 
