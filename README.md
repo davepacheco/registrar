@@ -22,7 +22,7 @@ Table of Contents:
 * [Operating Registrar](#operating-registrar)
 * [Developing with Registrar](#developing-with-registrar) (includes
   configuration reference)
-* [ZooKeeper data format](#zookeper-data-format)
+* [ZooKeeper data format](#zookeeper-data-format)
 
 
 ## Service discovery in Triton and Manta
@@ -170,105 +170,141 @@ file, and runs through the process described at the top of this README.
 
 ### Configuration reference
 
-The configuration has two top-level properties:
+The configuration file is specified using the `-f` argument to "main.js".  The
+file is a JSON object with top-level properties:
 
-* `"zookeeper"` (object), a configuration block appropriate for
-  [node-zkplus](http://github.com/mcavage/node-zkplus).  See that project for
-  details, but essentially this needs to have a `"timeout"` and `"servers"`, an
-  array of objects with `"host"` and `"port"` properties identifying the servers
-  in the ZooKeeper cluster.
-* `"registration"` (object), an object describing the service and host records
-  to be registered into ZooKeeper
+Property         | Type            | Description
+---------------- | --------------- | -----------
+`"adminIp"`      | optional string | IPv4 address to include in DNS records
+`"registration"` | object          | describes which DNS names should be created
+for this component
+`"zookeeper"`    | object          | describes how to connect to the ZooKeeper cluster
 
-Registrar creates two broad types of records in ZooKeeper:
+**Address:**  The address for all DNS answers related to this component is
+whatever is provided by the `"adminIp"` configuration property.  This is the IP
+address used by clients that use DNS to discover this component.  For Triton
+components, this should usually be an addresss on the "admin" network.  For
+Manta components, this should usually be an address on the "manta" network.
+If `"adminIp"` is not specified in the configuration, then Registrar picks an
+up, non-loopback IP address on the system and uses that, but this is not
+recommended.
 
-* **Host records** identify individual zones (containers) that implement a
-  particular service.  These include the IP addresses (and possibly port
-  information) for these zones.
-* **Service records** describe general information about the service provided by
-  each of several hosts described by host records.
+**ZooKeeper configuration:** Service discovery records are maintained in a
+ZooKeeper cluster.  The `"zookeeper"` top-level property describes how to reach
+that cluster.  This should be a configuration block appropriate for
+[node-zkplus](http://github.com/mcavage/node-zkplus).  See that project for
+details, but essentially this needs to have a `"timeout"` and `"servers"`.
+`"servers"` should be an array of objects with `"host"` and `"port"` properties
+identifying the servers in the ZooKeeper cluster.
 
-To be concrete: for a service called `authcache` in a Triton or Manta deployment
-using the DNS suffix `emy-10.joyent.us`, typically there will be one persistent
-service record for `authcache.emy-10.joyent.us` and a separate host record for
-each zone (e.g., under `$zone_uuid.authcache.emy-10.joyent.us`).
+**Registration:** The `"registration"` object describes the service discovery
+records that will be inserted into ZooKeeper.  These control the DNS names that
+are available for this component.  Broadly, there are broadly types of service
+discovery records:
 
-The details are described under "ZooKeeper data format" below.  In terms of the
-configuration under `"registration"`:
+* **Host records** essentially allow Binder to answer DNS "A" and "SRV" queries
+  with the IP address (and possibly port numbers) for a single instance.  More
+  precisely, host records are individual nodes in the ZooKeeper namespace that
+  provide address and port information for a single zone.  These are ephemeral,
+  which means they disappear when Registrar's ZooKeeper session expires.  That's
+  by design so that if a zone disappears, it stops showing up in DNS.
+* **Service records** allow Binder to answer DNS "A" and "SRV" queries for a
+  single logical service that's provided by any number of interchangeable
+  instances.  The list of instances available are represented by host records
+  that are child nodes of the service record (within the ZooKeeper namespace).
 
-* `"domain"` (required string) is the DNS name corresponding to the service to
-  be registered.  Registrar would usually write a `"service"` record directly at
-  this domain (depending on whether `"service"` is specified below), and it
-  always writes at least one host record for the current zone (container) as a
-  child node of the path corresponding to this domain.  In the examples above,
-  `"domain"` would be `"authcache.emy-10.joyent.us"`.
-* `"type"` (required string): the `"type"` of whatever `"host"` records
-  Registrar will write as child nodes under `"domain"`
-* `"service"` (optional object): if present, this specifies that a persistent
-  service record will be written for the DNS name `domain` with information
-  used to answer DNS SRV queries.  This record should have `"type"` and
-  `"service"` properties as described in the ZooKeeper data format below.
+Let's look at an example.  In Manta, instances of the "authcache" service
+publish host records under $zonename.authcache.$suffix.  As a result, if you
+have a Manta deployment whose DNS suffix is "emy-10.joyent.us", you can find the
+IP address for the "authcache" zone that's called
+`a2674d3b-a9c4-46bc-a835-b6ce21d522c2` by looking up
+`a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us`:
 
-There must also be a property under `"registration"` whose name matches the
-value of the `type` field.  This object should have an `"address"` property.
+    $ dig +nocmd +nocomments +noquestion +nostats a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us
+    a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us. 30 IN A 172.27.10.62
 
-Here's a full example configuration:
+We've just looked up the _host record_ for a particular authcache instance.  The
+authcache service also writes a _service record_ for the higher-level DNS name
+`authcache.emy-10.joyent.us`.  This lets clients of the authcache service use
+the DNS name `authcache.emy-10.joyent.us` to find all available authcache
+instances:
 
-    {
-        "registration": {
-            "domain": "1.moray.us-east-1.joyent.com",
-            "type": "load_balancer",
-            "load_balancer": {
-                "address": "10.99.99.193"
-            },
-            "service": {
-                "type": "service",
-                "service": {
-                    "srvce": "_http",
-                    "proto": "_tcp",
-                    "ttl": 60,
-                    "port": 2020
-                }
-            }
-        }
-        "zookeeper": {
-            "servers": [ {
-                "host": "10.99.99.40",
-                "port": 2181
-            }, {
-                "host": "10.99.99.41",
-                "port": 2181
-            }, {
-                "host": "10.99.99.192",
-                "port": 2181
-            } ],
-            "timeout": 1000
-        }
-    }
+    $ dig +nocmd +nocomments +noquestion +nostats authcache.emy-10.joyent.us 
+    authcache.emy-10.joyent.us. 30  IN      A       172.27.10.67
+    authcache.emy-10.joyent.us. 30  IN      A       172.27.10.62
 
-This indicates:
+**Summary:** A service can provide host records (when there's only one IP
+address for a given DNS name) or service records (when there may be multiple
+interchangeable instances).  The `registration` block of the configuration file
+determines which records are created.  This block contains properties:
 
-- This zone is part of the service provided by DNS name
-  `1.moray.us-east-1.joyent.com`.  Registrar will write a host record at
-  `$zone_hostname.1.moray.us-east-1.joyent.com`, and you can use that DNS name
-  to identify the IP address of this zone.
-- Host records for this zone have type `"load_balancer"` and `"address"`
-  10.99.99.193.
-- SRV records will be under `_moray._tcp.1.moray.us-east-1.joyent.com`.  The
-  default port is 2020.
-- The ZooKeeper cluster has the specified three hosts listening on port 2181
+Property    | Type                     | Description
+----------- | ------------------------ | -----------
+`"domain"`  | string                   | DNS name under which records will be created for this instance
+`"aliases"` | optional array of string | array of fully-qualified DNS names to create as additional host records for this instance
+`"type"`    | string                   | the specific subtype of record to use for the host records created for this instance
+`"service"` | optional object          | if present, a service record will be created with properties described by this object (see below)
+
+Registrar creates the following records:
+
+* A host record is *always* created at `$(hostname).$domain`.  `$(hostname)`
+  here is the system's hostname (see hostname(1)) and `$domain` refers to the
+  configuration property above.
+* If the `aliases` array is present, then additional host records are created
+  for each string in the array.  These should be fully qualified -- they should
+  generally end with the value of `domain`.
+* If `service` is present, a service record is created at the DNS name `$domain`
+  itself.  The `service` object is described below.
+
+All records -- host records and service records -- internally have a specific
+`type`.  The `"type"` property above controls the types used for the host
+records that Registrar creates.  (Service records always have type `"service"`,
+and any type other than `"service"` indicates a host record.)  The specific
+`"type"` determines exactly how Binder uses them.  The following types are
+supported:
+
+Type              | Can be queried directly? | Can be used for Service?
+----------------- | ------------------------ | ------------------------
+`"db_host"`       | yes                      | no
+`"host"`          | yes                      | no
+`"load_balancer"` | yes                      | yes
+`"moray_host"`    | yes                      | yes
+`"ops_host"`      | no                       | yes
+`"redis_host"`    | yes                      | yes
+`"rr_host"`       | no                       | yes
+
+For types that cannot be queried directly ("ops\_host" and "rr\_host"), if you
+query the corresponding DNS name, Binder will behave as though they weren't
+there.  This is not generally useful in new components.
+
+For types that cannot be used as a service ("db\_host" and "host"), if these
+records are found as child nodes of a "service" record, they will not be
+included in the DNS results for the service itself.  This is not generally
+useful in new components.
+
+In a simpler world, all host record types could be queried directly (meaning
+that when you look up a DNS name that maps to a host record of that type, Binder
+answers with the address information in that record), and they could also be
+used as backing hosts for a "service" record.  For historical reasons, that's
+not true, and it's not easy to change.
+
+**Summary:** The most common case is that each instance of a component is
+interchangeable, and clients can talk to any one of them.  In that case, you
+should use host records of type `"load_balancer"` and separately configure a
+"service" record.  This will cause `"domain"` to be a DNS name that lists all of
+the active instances' IP addresses, and `$zonename.$domain` can be used to find
+the address of specific instances when that's needed (mostly for debugging).  On
+the other hand, if you want to create standalone host records that aren't part
+of a logical service, use type `"host"` and do not create an associated service
+record.  This is not common.
 
 <!--
-    XXX
-    - add "aliases" documentation
-    - check various parts of above
-      - look at Triton moray for the example?
-    - explain how the IP address is derived?
-      - my notes say that it comes from adminIp or non-internal address, but
-	that doesn't seem to match the configuration example that has the
-	address in the "load_balancer" record
-    - where do ports come from?  my notes say registration.ports or fallback to
-      registration.service.service.port.
+    XXX Walk through an example at this point.  Show the configuration file and
+    what DNS names are created.  Don't use the one that used to be in the
+    documentation because it's wrong.
+
+    Then add a section detailing the format for service records.
+    Then add a section explaining the use of ports and SRV records.
 -->
 
 
@@ -279,31 +315,43 @@ and read by Binder.  It's thus a contract between these components.  However, it
 was historically not documented, and several pieces are redundant or confusing.
 Additionally, this information is not thoroughly validated in Binder.
 
+**Caveat:** This information is provided for reference only.  The existing
+implementation is not crisp enough or validated enough to use this information
+to write an alternate implementation and expect that it will interoperate with
+the existing one.
+
+**Before reading this section, be sure to read and understand the "Configuration
+reference" section.  It covers the basic underlying concepts that are used in
+this section.**
+
+
 ### ZooKeeper paths
 
 ZooKeeper provides a filesystem-like API: there's a hierarchical,
-slash-delimited namespace of objects.  Registrar stores data in paths
-corresponding to DNS domains.  Triton and Manta deployments have a fixed DNS
-suffix that's used for all services.
+slash-delimited namespace of objects.  Data about DNS domains is stored into
+ZooKeeper in paths derived from the domains by reversing the components of the
+domain and replacing dots (".") with slashes ("/").  So the information for
+domain "authcache.emy-10.joyent.us" is contained under
+"/us/joyent/emy-10/authcache" in the ZooKeeper namespace.
 
-For example, a deployment in a region called "emy-10" would likely have the DNS
-suffix "emy-10.joyent.us".  The "authcache" service in this deployment would
-have the DNS name "authcache.emy-10.joyent.us".  An instance of "authcache" that
-was called "instance0" would have the DNS name
-"instance0.authcache.emy-10.joyent.us".  The data for each of these domains is
-stored in a ZooKeeper path by reversing the order of the components.  So the
-data for "instance0.authcache.emy-10.joyent.us" is stored in the ZooKeeper
-object at "/us/joyent/emy-10/authcache/instance0".  There is also service-wide
-data stored in "/us/joyent/emy-10/authcache".  (ZooKeeper allows its analog of
-directories to also contain data, so the node at "/us/joyent/emy-10/authcache"
-acts as both an object and a directory.)
+For a service like authcache, the typical ZooKeeper node structure looks
+like this:
+
+* "/us/joyent/emy-10/authcache" contains the service record for "authcache".
+* Nodes underneath this path (like
+  "/us/joyent/emy-10/authcache/a2674d3b-a9c4-46bc-a835-b6ce21d522c2") contain
+  host records for individual instances of "authcache".
+
+The ZooKeeper analog of directory nodes can themselves contain data, so the node
+at "/us/joyent/emy-10/authcache" acts as both an object and a directory.
 
 ### Overview of service discovery records
 
 All of the ZooKeeper nodes written by Registar contain JSON payloads.  We call
-these **service discovery records**.  Every service discovery record includes:
+these **service discovery records**.  Internally, every service discovery record
+includes:
 
-- required `"type"`, a string identifying the type of this record.
+- required `"type"`, a string identifying the specific type of this record.
 - a required property with the same name as the type that provides type-specific
   details, described below.  For example, if the `type` has value `"service"`,
   then there will be a top-level property called `"service"` that contains more
@@ -313,16 +361,17 @@ these **service discovery records**.  Every service discovery record includes:
 There are broadly two kinds of records: **host records** and **service
 records**.  Host records indicate that a DNS name maps to a particular host
 (usually a zone or container).  Service records indicate that a DNS name is
-served by one or more other hosts that are specified by child nodes (in the
-ZooKeeper tree).  Binder will reply to DNS requests with information about all
-of the hosts that it finds underneath the "service" record.
+served by one or more other hosts that are specified by child nodes in the
+ZooKeeper tree.  Binder will reply to DNS requests with information about all of
+the hosts that it finds underneath the "service" record.  For details about host
+and service records, see the "Configuration reference" above.
 
-For example, suppose we have a logical service called `authcache` in a
-deployment that uses DNS suffix `emy-10.joyent.us`.  If we query Binder for `A`
-records for `authcache.emy-10.joyent.us`, we expect to get a list of IP
-addresses for the various instances `authcache`.  We expect we can connect to
-any of these instances on some well-known port to use the `authcache` service.
-How does this work?
+Suppose we have a logical service called `authcache` in a deployment that uses
+DNS suffix `emy-10.joyent.us`.  If we query Binder for `A` records for
+`authcache.emy-10.joyent.us`, we expect to get a list of IP addresses for the
+various instances `authcache`.  We expect we can connect to any of these
+instances on some well-known port to use the `authcache` service.  How does this
+work?
 
 When we query Binder for `authcache.emy-10.joyent.us`, assuming the result is
 not cached, Binder fetches the ZooKeeper node at `/us/joyent/emy-10/authcache`.
@@ -343,11 +392,11 @@ There, it finds a service record (with `"type" == "service"`):
     }
 
 Seeing a service record, Binder then _lists_ the children of the ZooKeeper node
-`/us/joyent/emy-10/authcache` to find host records for individual instances of
+"/us/joyent/emy-10/authcache" to find host records for individual instances of
 the `authcache` service.  (Remember, ZooKeeper's namespace looks like a
 filesystem, but the nodes that you'd think of as directories can themselves also
 contain data.  In this case, the _data_ at `/us/joyent/emy-10/authcache` is the
-service record.  The child nodes in that "directory" describe the specific
+service record.  The child nodes in that directory describe the specific
 instances.)  In this example, that includes two instances:
 
 * a2674d3b-a9c4-46bc-a835-b6ce21d522c2
@@ -376,33 +425,20 @@ this:
       }
     }
 
-<!-- XXX which IP address is used? -->
+The record includes the IP address and TTLs that will be included in DNS
+answers.  In this case, there are two addresses for
+"authcache.emy-10.joyent.us":
 
-The record includes the IP address of the instance and TTLs for the DNS answers.
-This information allows Binder to answer queries for "A" records.  "A" records
-identify the IPv4 addresses associated with a DNS name.  In this case, there are
-two addresses for `authcache.emy-10.joyent.us`:
-
-    $ dig authcache.emy-10.joyent.us
-    ...
-    ;; QUESTION SECTION:
-    ;authcache.emy-10.joyent.us.    IN      A
-
-    ;; ANSWER SECTION:
-    authcache.emy-10.joyent.us. 30  IN      A       172.27.10.62
+    $ dig +nocmd +nocomments +noquestion +nostats authcache.emy-10.joyent.us 
     authcache.emy-10.joyent.us. 30  IN      A       172.27.10.67
+    authcache.emy-10.joyent.us. 30  IN      A       172.27.10.62
 
 In order to use these, clients need to know the TCP port that the `authcache`
 service uses.
 
 Note that clients can also query for the host records directly:
 
-    $ dig a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us
-    ...
-    ;; QUESTION SECTION:
-    ;a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us. IN A
-
-    ;; ANSWER SECTION:
+   $ dig +nocmd +nocomments +noquestion +nostats a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us
     a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us. 30 IN A 172.27.10.62
 
 In this case, Binder answers the query by fetching the ZooKeeper node
@@ -414,7 +450,7 @@ also answer DNS "SRV queries.  "SRV" answers identify not just IP addresses, but
 also TCP ports for multiple servers listening on the same IP address.  These are
 used for situations where multiple processes (usually Node programs) are
 listening in the same zone.  For example, in modern Triton deployments, the
-`moray.emy-10.joyent.us` domain provides SRV recors for each of the instances
+`moray.emy-10.joyent.us` domain provides SRV records for each of the instances
 within each Moray zone:
 
 <!-- XXX example DNS result -->
@@ -438,23 +474,11 @@ Host records are those with `"type"` other than `"service"`.  These indicate
 that the corresponding DNS name represents a single host (usually a zone or
 container).
 
-There are several supported values of `"type"`.  The type determines whether a
-record can be queried directly (e.g., by looking up the DNS name corresponding
-exactly to the host record itself) or whether the record can be used as a child
-of another `"service"` record.
-
-Type              | Can be queried directly? | Can be used for Service?
------------------ | ------------------------ | ------------------------
-`"db_host"`       | yes                      | no
-`"host"`          | yes                      | no
-`"load_balancer"` | yes                      | yes
-`"moray_host"`    | yes                      | yes
-`"ops_host"`      | no                       | yes
-`"redis_host"`    | yes                      | yes
-`"rr_host"`       | no                       | yes
-
-There's a vestigial type called `"database"` which was historically produced by
-Manatee, but this type of record is no longer used nor consumed.
+Supported values of `"type"` (and the semantics of each type) are described in
+the "Configuration reference" section above.  Those types map exactly to the
+`"type"` field in the host record.  There's also a vestigial type called
+`"database"` which was historically produced by Manatee, but this type of record
+is no longer used nor consumed.
 
 The various types of host records largely function the same way: each of these
 records causes Binder to produce either one `"A"` record with the IP address of
@@ -479,7 +503,7 @@ record includes:
 - optional `"ports"`: an array of positive integers identifying TCP ports on
   which this instance is listening for connections.  If these are specified,
   then Binder will be able to answer SRV queries for this domain as described
-  above.
+  above. <!-- XXX that's not quite true; something else seems to be required -->
 
 Here's an example host record that uses these fields:
 
