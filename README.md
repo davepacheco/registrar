@@ -23,6 +23,7 @@ Table of Contents:
 * [Developing with Registrar](#developing-with-registrar) (includes
   configuration reference)
 * [ZooKeeper data format](#zookeeper-data-format)
+* [Debugging Frequently Asked Questions](#debugging-frequently-asked-questions)
 
 
 ## Service discovery in Triton and Manta
@@ -170,7 +171,7 @@ file, and runs through the process described at the top of this README.
 
 ### Configuration reference
 
-The configuration file is specified using the `-f` argument to "main.js".  The
+The configuration file is specified using the "-f" argument to "main.js".  The
 file is a JSON object with top-level properties:
 
 Property         | Type            | Description
@@ -213,6 +214,9 @@ discovery records:
   instances.  The list of instances available are represented by host records
   that are child nodes of the service record (within the ZooKeeper namespace).
 
+
+#### Using host and service records
+
 Let's look at an example.  In Manta, instances of the "authcache" service
 publish host records under $zonename.authcache.$suffix.  As a result, if you
 have a Manta deployment whose DNS suffix is "emy-10.joyent.us", you can find the
@@ -235,8 +239,13 @@ instances:
 
 **Summary:** A service can provide host records (when there's only one IP
 address for a given DNS name) or service records (when there may be multiple
-interchangeable instances).  The `registration` block of the configuration file
-determines which records are created.  This block contains properties:
+interchangeable instances).
+
+
+#### Configuration the registration
+
+The `registration` block of the configuration file determines which records are
+created.  This block contains properties:
 
 Property    | Type                     | Description
 ----------- | ------------------------ | -----------
@@ -255,6 +264,9 @@ Registrar creates the following records:
   generally end with the value of `domain`.
 * If `service` is present, a service record is created at the DNS name `$domain`
   itself.  The `service` object is described below.
+
+
+#### Registration of host records
 
 All records -- host records and service records -- internally have a specific
 `type`.  The `"type"` property above controls the types used for the host
@@ -298,17 +310,139 @@ the other hand, if you want to create standalone host records that aren't part
 of a logical service, use type `"host"` and do not create an associated service
 record.  This is not common.
 
-<!--
-    XXX Walk through an example at this point.  Show the configuration file and
-    what DNS names are created.  Don't use the one that used to be in the
-    documentation because it's wrong.
+**Example:** Here's an example configuration 
 
-    Then add a section detailing the format for service records.
-    Then add a section explaining the use of ports and SRV records.
--->
+    {
+        "registration": {
+            "type": "load_balancer",
+            "domain": "example.joyent.us",
+            "aliases": [
+                "host-1a.example.joyent.us",
+                "host-1b.example.joyent.us"
+            ]   
+        },  
+        "adminIp": "172.27.10.72",
+        "zookeeper": {
+            "timeout": 60000,
+            "servers": [ { "host": "172.27.10.35", "port": 2181 },
+                         { "host": "172.27.10.32", "port": 2181 },
+                         { "host": "172.27.10.33", "port": 2181 } ] 
+        }   
+    }
+
+In these and subsequent examples, "172.27.10.72" is the IP address of the
+Registrar instance on the network on which we're providing the
+"example.joyent.us" service.  The "zookeeper" block is specific to this
+deployment and points Registrar at the ZooKeeper cluster.  
+
+This example specifies that we're registering an instance of the service
+"example.joyent.us".  This will create three host records: one for the Registrar
+instance's hostname (which is "b44c74d6" in this case) and one for each of the
+two aliases "host-1a.example.joyent.us" and "host-1b.example.joyent.us".  We can
+look up any of these:
+
+    $ dig host-1a.example.joyent.us +short
+    172.27.10.72
+    $ dig host-1b.example.joyent.us +short
+    172.27.10.72
+    $ dig b44c74d6.example.joyent.us +short
+    172.27.10.72
+
+This configuration did not specify `"service"`, so there are no service-level
+records, so there's no way to list all of the hosts under "example.joyent.us".
+(As of this writing, if you try to lookup "example.joyent.us", Binder will crash
+because of [MANTA-3058](https://smartos.org/bugview/MANTA-3058).)
+
+#### Registration of service records
+
+As mentioned above, service records are used for two purposes:
+
+- to indicate that a particular DNS name is served by any of several
+  interchangeable instances
+- to provide port information so that Binder can answer SRV queries
+
+To have Registrar create a service record, specify a `"service"` property under
+the `"registration"` object.  The `"service"` object must have a property
+`"type"` with value `"service"` and another `"service"` object with properties:
+
+Property  | Type            | Meaning
+--------- | --------------- | -------------------------------
+`"srvce"` | string          | service to use for SRV answers
+`"proto"` | string          | protocol to use for SRV answers
+`"port"`  | number          | port to use for SRV answers
+`"ttl"`   | optional number | TTL to use for SRV answers
+
+Note that the presence of `"service"` causes Registrar to create a service
+record.  The other fields are required.  So it's not possible to specify a
+service record without also providing the information required to answer SRV
+queries.
+
+Let's augment the configuration above to specify a service record:
+
+    {
+        "registration": {
+            "type": "load_balancer",
+            "domain": "example.joyent.us",
+            "service": {
+                "type": "service",
+                "service": {
+                    "srvce": "_http",
+                    "proto": "_tcp",
+                    "port": 80
+                }
+            }
+        },
+        "adminIp": "172.27.10.72",
+        "zookeeper": {
+            "timeout": 60000,
+            "servers": [ { "host": "172.27.10.35", "port": 2181 },
+                         { "host": "172.27.10.32", "port": 2181 },
+                         { "host": "172.27.10.33", "port": 2181 } ]
+        }
+    }
+
+(We also dropped the aliases because those were just for demonstration.)
+
+With the service configuration in place, we can still look up the IP address
+for a specific instance:
+
+    $ dig b44c74d6.example.joyent.us  +short
+    172.27.10.72
+
+but we can also list all instances:
+
+    $ dig example.joyent.us  +short
+    172.27.10.72
+
+If we start up another Registrar instance with a similar configuration with IP
+address 172.27.10.73, then we'd get both results:
+
+    $ dig example.joyent.us  +short
+    172.27.10.72
+    172.27.10.73
+
+Note that because the service record configuration includes port numbers,
+Binder can now answer SRV queries as well.  To make these queries with dig(1),
+we specify `-t SRV` (to ask for SRV answers) and specify a DNS name starting
+with `_http._tcp.` (because it's conventional for SRV requests to prepend the
+service and protocol names to the DNS name that you'd otherwise be using for
+the service):
+
+    $ dig -t SRV +nocmd +nocomments +noquestion +nostats _http._tcp.example.joyent.us 
+    _http._tcp.example.joyent.us. 60 IN     SRV     0 10 80 b44c74d6.example.joyent.us.
+    b44c74d6.example.joyent.us. 30  IN      A       172.27.10.72
+
+SRV queries allow clients to discover each of several instances running inside
+a container.  This is the preferred approach for new services because it
+eliminates the need for a local loadbalancer, which improves performance and
+availability and also simplifies debugging.
 
 
 ## ZooKeeper data format
+
+This section describes the structure of service discovery records that are
+stored in ZooKeeper.  You don't need this unless you're debugging or developing
+Registrar or ZooKeeper.
 
 The service discovery information in ZooKeeper is always written by Registrar
 and read by Binder.  It's thus a contract between these components.  However, it
@@ -351,7 +485,7 @@ All of the ZooKeeper nodes written by Registar contain JSON payloads.  We call
 these **service discovery records**.  Internally, every service discovery record
 includes:
 
-- required `"type"`, a string identifying the specific type of this record.
+- a required `"type"`, a string identifying the specific type of this record.
 - a required property with the same name as the type that provides type-specific
   details, described below.  For example, if the `type` has value `"service"`,
   then there will be a top-level property called `"service"` that contains more
@@ -359,19 +493,16 @@ includes:
   rest of the details will be called `"moray_host"`.
 
 There are broadly two kinds of records: **host records** and **service
-records**.  Host records indicate that a DNS name maps to a particular host
-(usually a zone or container).  Service records indicate that a DNS name is
-served by one or more other hosts that are specified by child nodes in the
-ZooKeeper tree.  Binder will reply to DNS requests with information about all of
-the hosts that it finds underneath the "service" record.  For details about host
-and service records, see the "Configuration reference" above.
+records**.  As described above, host records indicate that a DNS name maps to a
+particular host (usually a zone or container).  Service records indicate that a
+DNS name is served by one or more other hosts that are specified by child nodes
+in the ZooKeeper tree.  Binder will reply to DNS requests with information about
+all of the hosts that it finds underneath a "service" record.
 
-Suppose we have a logical service called `authcache` in a deployment that uses
-DNS suffix `emy-10.joyent.us`.  If we query Binder for `A` records for
-`authcache.emy-10.joyent.us`, we expect to get a list of IP addresses for the
-various instances `authcache`.  We expect we can connect to any of these
-instances on some well-known port to use the `authcache` service.  How does this
-work?
+If we query Binder for `A` records for `authcache.emy-10.joyent.us`, we expect
+to get a list of IP addresses for the various instances `authcache`.  We expect
+we can connect to any of these instances on some well-known port to use the
+`authcache` service.  How does this work?
 
 When we query Binder for `authcache.emy-10.joyent.us`, assuming the result is
 not cached, Binder fetches the ZooKeeper node at `/us/joyent/emy-10/authcache`.
@@ -443,104 +574,233 @@ Note that clients can also query for the host records directly:
 
 In this case, Binder answers the query by fetching the ZooKeeper node
 `/us/joyent/emy-10/authcache/a2674d3b-a9c4-46bc-a835-b6ce21d522c2`, finding the
-host record there, and producing an "A" record.
+host record there, and producing an "A" record.  The service record is not
+involved here.
 
-When service or host records include port information (as above), Binder can
-also answer DNS "SRV queries.  "SRV" answers identify not just IP addresses, but
-also TCP ports for multiple servers listening on the same IP address.  These are
-used for situations where multiple processes (usually Node programs) are
-listening in the same zone.  For example, in modern Triton deployments, the
-`moray.emy-10.joyent.us` domain provides SRV records for each of the instances
-within each Moray zone:
-
-<!-- XXX example DNS result -->
-
-The SRV record information comes from this service record under
-`/us/joyent/emy-10/moray`:
-
-<!-- XXX -->
-
-and these host records under `/us/joyent/emy-10/moray/XXX` <!-- XXX -->
-
-<!-- XXX -->
-
-SRV records allow clients to find all available servers running inside a
+Service records also include the information required for Binder to answer DNS
+SRV queries.  These allow clients to find all available servers running inside a
 container, which allows for more effective load balancing and resiliency than
-using a separate load balancer.
+using a separate load balancer.  For a worked example, see the "Configuration
+reference".
+
 
 ### Host record reference
-
-Host records are those with `"type"` other than `"service"`.  These indicate
-that the corresponding DNS name represents a single host (usually a zone or
-container).
-
-Supported values of `"type"` (and the semantics of each type) are described in
-the "Configuration reference" section above.  Those types map exactly to the
-`"type"` field in the host record.  There's also a vestigial type called
-`"database"` which was historically produced by Manatee, but this type of record
-is no longer used nor consumed.
-
-The various types of host records largely function the same way: each of these
-records causes Binder to produce either one `"A"` record with the IP address of
-that instance or multiple `"SRV"` records with the IP address and ports of the
-various instances contained inside the zone.
 
 Host records are usually ephemeral nodes in ZooKeeper, which means they are
 removed when the corresponding Registrar becomes disconnected from ZooKeeper.
 
-In addition to the `"type"` field, each host record these has a top-level
-property with the same name as the `"type"` property's value.  For example, a
-`"load_balancer"` record has a top-level object called `"load_balancer"`.  This
-record includes:
+Host records have the following top-level properties:
 
-- required `"address"`: an IPv4 address.  This is used to fill in both DNS "A"
-  records and "SRV" records.  This should be the IP address on which this
-  instance has TCP servers listening.
-- optional `"ttl"`: a positive integer used for the TTL of any DNS answers
-  generated from this record.  If this is unspecified, it may be specified by a
-  higher-level "service" record (described below) or filled in with a default
-  value in Binder.
-- optional `"ports"`: an array of positive integers identifying TCP ports on
-  which this instance is listening for connections.  If these are specified,
-  then Binder will be able to answer SRV queries for this domain as described
-  above. <!-- XXX that's not quite true; something else seems to be required -->
+Property    | Type                       | Meaning
+----------- | -------------------------- | -------
+`"address"` | string                     | Apparently unused.  Possibly historical.
+`"type"`    | string                     | Subtype of host record.  See below.
+`"ttl"`     | optional integer           | See "About TTLs" below.
+`type`      | object                     | The property name always matches the value of `"type"`.  See below for details.
 
-Here's an example host record that uses these fields:
+Host records are distinguished from service records by having any `"type"` other
+than `"service"`.  Supported values of `"type"` (and the semantics of each type)
+are the same as those supported in the Registrar configuration.  The various
+types of host records largely function the same way: each of these records
+causes Binder to produce either one `"A"` record with the IP address of that
+instance or multiple `"SRV"` records with the IP address and ports of the
+various instances contained inside the zone.  (There's also a vestigial type
+called `"database"` which was historically produced by Manatee, but this type of
+record is neither produced nor consumed any more.)
 
-<!-- XXX -->
+The inner object (that has the same name as the value of `"type"`) has
+properties:
+
+Property    | Type                       | Meaning
+----------- | -------------------------- | -------
+`"address"` | string                     | IPv4 address to use for A and SRV query responses.
+`"ports"`   | optional array of integers | TCP ports to use for SRV records.  Binder generates one SRV answer for each element of this array.
+`"ttl"`     | optional integer           | See "About TTLs" below.
+
+Here's a host record created from our example above:
+
+    {
+      "type": "load_balancer",
+      "address": "172.27.10.72",
+      "load_balancer": {
+        "address": "172.27.10.72",
+        "ports": [ 80 ]
+      }
+    }
+
+When queried for "A" records, Binder reports one for 172.27.10.72.  When queried
+for SRV records, assuming the parent node (in ZooKeeper) for this host record is
+a service record, then Binder uses the protocol and service mentioned in the
+"service" record to generate an SRV answer for each port contained in this
+record.
+
 
 ### Service record reference
 
-Service records are those with `"type"` equal to `"service"`.  These indicates
-that the corresponding DNS name represents a service with multiple equivalent
-instances.  Binder will handle queries for this DNS name by querying ZooKeeper
-for all of the child records and then reporting all of the results it finds.
-Clients generally try to use one or more of these instances at random.
+Service records are those with `"type"` equal to `"service"`.  These are
+persistent nodes in ZooKeeper.
 
-These ZooKeeper records are generally persistent, not ephemeral, since they
-represent information about the DNS name, not transient information about what
-instances are currently running.
+Service records have the following top-level properties:
 
-Here's an example service record:
+Property    | Type                       | Meaning
+----------- | -------------------------- | -------
+`"type"`    | string                     | Always has value "service".  (Otherwise, this is a host record.)
+`"service"` | object                     | Describes the service name, protocol name, and TTL used for answering SRV queries about this service.  The format of this object exactly matches the `registration.service` object in the Registrar configuration.
 
-<!-- XXX -->
+Here's a service record created from our example above:
 
-Besides the `"type"` property, service records have an extra top-level property
-called `"service"` which contains any additional information.  This object
-itself has a property called `"type"` which is always `"service"`, an optional
-`"ttl"` similar to that on host records, and an additional object called
-`"service"`.  This last object contains information used by Binder to answer SRV
-queries:
-
-* `"srvce"`: the SRV record's service name (e.g., `"_http"` or `"_moray"`)
-* `"proto"`: the SRV record's protocol name (usually `"_tcp"`)
-* `"port"`: a positive integer identifying the TCP port of the service.  Note
-  that this is overridden by a `"ports"` array on the parent object.
-* `"ttl`": an optional integer TTL used for SRV answers.  Unlike `"ports"`, a
-  value here overrides a value on the parent object.
+    {
+      "type": "service",
+      "service": {
+        "type": "service",
+        "service": {
+          "srvce": "_http",
+          "proto": "_tcp",
+          "port": 80,
+          "ttl": 60
+        }
+      }
+    }
 
 DNS SRV records also support weights, but these are not supported by Registrar
 or Binder.
+
+
+### About TTLs
+
+The semantics around which TTLs are used in DNS responses are surprisingly
+complex.  In all cases, Binder provides default TTL values when none is
+specified by the mechanisms below.
+
+When looking up the IP address of a specific instance (not a service), you
+generally query Binder for "A" records for a DNS name that corresponds to a host
+record.  In this case, the TTL is selected from whichever of the following is
+specified, in this order:
+
+* a TTL on the inner object within the host record (e.g.,
+  `hostRecord[hostRecord.type].ttl`).
+* a TTL on the host record itself (e.g., `hostRecord.ttl`)
+
+When looking up a service's DNS name, you query Binder for "A" or "SRV" records
+for a DNS name that corresponds to a service record.  In this case, Binder
+produces both "SRV" answers (that describe the instances available, using the
+DNS name for each host and a port number) and "A" answers as additionals
+(containing the resolutions for the hostnames provided in the "SRV" answers).
+For example, when you ask for the SRV records for
+"\_http.\_tcp.example.joyent.us", you get:
+
+    $ dig +nocmd +nostats -t SRV _http._tcp.example.joyent.us 
+    ;; Got answer:
+    ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 6415
+    ;; flags: qr rd ad; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 2
+    ;; WARNING: recursion requested but not available
+    
+    ;; OPT PSEUDOSECTION:
+    ; EDNS: version: 0, flags:; udp: 1470
+    ;; QUESTION SECTION:
+    ;_http._tcp.example.joyent.us.  IN      SRV
+    
+    ;; ANSWER SECTION:
+    _http._tcp.example.joyent.us. 60 IN     SRV     0 10 80 b44c74d6.example.joyent.us.
+    
+    ;; ADDITIONAL SECTION:
+    b44c74d6.example.joyent.us. 30  IN      A       172.27.10.72
+
+Binder is telling us that there's an instance at "b44c74d6.example.joyent.us"
+port 80, and it's separately telling us that the address for
+"b44c74d6.example.joyent.us" is 172.27.10.72.  **These two results can have
+different TTLs.**  The TTL on the SRV records indicates how long the client
+should cache the list of instances.  Changes to this list should be propagated
+quickly, so we typically use TTLs on the order of 30 to 60 seconds.  However,
+the TTLs on the "A" resolutions can be much longer, because it's almost unheard
+of for the IP address to change for a specific Triton or Manta zone.
+
+There are basically two possibilities here:
+
+- If the TTL on the SRV records is shorter than or equal to that of the
+  additional A records (as we said might be desirable), then the client will
+  generally re-resolve the SRV name as frequently as its TTL indicates.  Since
+  Binder always provides additionals for the A records, the client never needs
+  to re-resolve the A records.  The client ends up re-resolving all records on
+  an interval specified by the TTL.
+- If the TTL on the SRV records is longer than that of the A records, then a
+  client would have to re-resolve the A records more frequently than the SRV
+  records.  That would likely result in significantly more load on Binder than
+  is desirable.  There's also not much reason to do this, since the addresses
+  for individual zones don't generally change.
+
+As a result, there's not generally much reason to have the TTLs differ between
+SRV records and A records, at least the way Binder and smart clients work today.
+
+Given all that, when you make an "SRV" query for a DNS name corresponding to a
+service (not a host), the TTL for the SRV records is selected from whichever of
+the following is specified, in this order:
+
+* a TTL on the service record's service details
+  (`serviceRecord.service.service.ttl`)
+* a TTL on the inner record on the service record (`serviceRecord.service.ttl`)
+* a TTL on the service record itself (`serviceRecord.ttl`)
+
+For the same query, the TTL for the "A" records is selected from:
+
+* a TTL on the child host record's inner record
+  (`hostRecord[hostRecord.type].ttl`)
+* a TTL on the child host record itself (`hostRecord.ttl`)
+
+When you make an "A" query for the same DNS name, the TTL used is the minimum of
+the above two TTLs (since the response represents both the list of instances and
+the addresses of each instance).
+
+
+## Debugging Frequently Asked Questions
+
+When Binder isn't reporting the results that you expect, ask the following
+questions.
+
+### Do you expect that the DNS results recently changed?
+
+DNS results may change any time a Registrar instance establishes a new ZooKeeper
+session to ZooKeeper or loses its ZooKeeper session.  There are a few reasons
+why this can take some time to be reflected in Binder:
+
+- Binder caches all ZooKeeper queries for up to 60 seconds.
+- ZooKeeper sessions can take up to 60 seconds to expire (depending on the
+  Registrar configuration).
+- DNS clients cache the answers to queries for up to the TTL on each answer.
+  This is typically 30-60 seconds, but can be several minutes, depending on the
+  component.
+
+As a result, when Registrar first starts up, it can take up to a minute for the
+new registration to be reflected in any particular Binder instance.  When
+Registrar shuts down (or the underlying server powers off, panics, or becomes
+partitioned), it can take at least two minutes for that to be reflected in
+Binder, and clients may not discover the change for an additional `TTL` seconds.
+
+Since the Binder instances operate independently (and cache independently), you
+can get inconsistent results if you make the same query against different
+Binders before they've all learned about recent updates.
+
+### Does the structure of records in ZooKeeper reflect what you expect?
+
+Use `zkCli.sh` (the ZooKeeper CLI) inside any "binder" or "nameservice" zone to
+answer this question.
+
+- If you're querying a service (e.g., "example.joyent.us"), you should find a
+  "service" record at the corresponding ZooKeeper node (e.g.,
+  "get /us/joyent/example").  You can "ls" that path to see the child nodes.  Do
+  you see the entries for hosts you expect to be there?  You can "get" each of
+  these.  You should find host records for the addresses that appear in DNS.
+- If you're querying a host (e.g., "$hostname.example.joyent.us"), you should
+  just find a host record at the corresponding ZooKeeper node.
+
+Remember too that only certain types of host records can be used with service
+DNS names.  If you're using a record of type "db\_host" or "host", it won't show
+up when you query the service DNS name.  See "Registration of host records"
+under the configuration reference above for details.
+
+If you don't find the records you expect in ZooKeeper, your Registrar
+configuration may be incorrect, or Registrar may not be functioning.  If you do,
+Binder may not be working correctly.
 
 
 ## License
