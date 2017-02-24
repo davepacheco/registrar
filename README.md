@@ -15,10 +15,9 @@ contribution guidelines, issues, and general documentation, visit the main
 [Triton](http://github.com/joyent/triton) and
 [Manta](http://github.com/joyent/manta) project pages.
 
-Table of Contents:
+## Table of Contents:
 
 * [Service discovery in Triton and Manta](#service-discovery-in-triton-and-manta)
-* [Health checking](#health-checking)
 * [Operating Registrar](#operating-registrar)
 * [Developing with Registrar](#developing-with-registrar) (includes
   configuration reference)
@@ -44,33 +43,33 @@ service called "authcache".  We'll assume the deployment uses DNS suffix
 
 1. The operator provisions a new instance of "authcache".  This creates a new
    SmartOS zone (container).  The new container gets a uuid.  In this example,
-   the uuid is `a2674d3b-a9c4-46bc-a835-b6ce21d522c2`.
+   the uuid is "a2674d3b-a9c4-46bc-a835-b6ce21d522c2".
 2. When the new zone boots up, various operating system services start up,
-   including the authentication cache itself and Registrar (this component).
+   including Registrar (this component).
 3. Registrar reads its configuration file, which specifies that it should
    register itself at "authcache.emy-10.joyent.us".
 4. Registrar connects to the ZooKeeper cluster and inserts a ZooKeeper ephemeral
    node called
-   `/us/joyent/emy-10/authcache/a2674d3b-a9c4-46bc-a835-b6ce21d522c2`.  The
+   "/us/joyent/emy-10/authcache/a2674d3b-a9c4-46bc-a835-b6ce21d522c2".  The
    contents of this node are a JSON payload that includes the IP address of this
    zone, as well as the ports it's listening on.
 5. Some time later, a client of authcache does a DNS query for
-   `authcache.emy-10.joyent.us` using its configured nameservers, which are
-   running instances of `binder`.  Assuming binder doesn't have the answer to
+   "authcache.emy-10.joyent.us" using its configured nameservers, which are
+   running instances of Binder.  Assuming binder doesn't have the answer to
    this query cached, it fetches the state out of ZooKeeper under
-   `/us/joyent/emy-10/authcache`.  From this, it finds the IP addresses and
+   "/us/joyent/emy-10/authcache".  From this, it finds the IP addresses and
    ports of the authcache instances, including those of our newly-provisioned
-   zone `a2674d3b-a9c4-46bc-a835-b6ce21d522c2`.  Binder caches this information
+   zone "a2674d3b-a9c4-46bc-a835-b6ce21d522c2".  Binder caches this information
    for subsequent queries.
 6. Binder translates this information into the appropriate DNS answers (usually
-   `A` records or `SRV` records, depending on what the DNS client asked for).
+   "A" records or "SRV" records, depending on what the DNS client asked for).
 
-If the zone is unprovisioned, or the server on which it's running reboots or
-powers off or becomes partitioned, Registrar will become disconnected from
-ZooKeeper.  This causes its ephemeral node to disappear from ZooKeeper.  Once
-the Binder caches expire and they re-fetch the state from ZooKeeper, they will
-no longer find information about the zone that's gone, so they will stop
-including that zone in DNS answers.  Clients will shortly stop using the zone.
+If the zone is destroyed, or the server on which it's running reboots or powers
+off or becomes partitioned, Registrar will become disconnected from ZooKeeper.
+This causes its ephemeral node to disappear from ZooKeeper.  Once the Binder
+caches expire and they re-fetch the state from ZooKeeper, they will no longer
+find information about the zone that's gone, so they will stop including that
+zone in DNS answers.  Clients will shortly stop using the zone.
 
 In this way:
 
@@ -89,27 +88,21 @@ are present in DNS.**  DNS is the way that clients discover what instances they
 might be able to use, but it should not be assumed that all those instances are
 currently operating.
 
-Of particular note, Registrar runs separately from the program that actually
+**Health checking:** Registrar runs separately from the program that actually
 provides service (the actual authentication cache process, in this example).  So
 it's also possible for the real service to crash or go offline while registrar
-is still online.  Health checking can in principle be used to mitigate this, but
-it's currently buggy.
-
-Many services (like [Moray](https://github.com/joyent/moray) use multiple
-processes in order to make use of more than one CPU.  The recommended way to
-implement this is to configure registrar to publish specific port information.
-This allows binder to answer queries with SRV records, which allow clients to
-discover not just individual zones, but the specific ports available in those
-zones.
-
-
-## Health checking
-
-Registrar supports basic health checking by executing a command periodically and
-unregistering an instance if the command fails too many times in too short a
-period.  However, as of this writing, this mechanism is extremely buggy.  See
-[HEAD-2282](http://smartos.org/bugview/HEAD-2282) and
+is still online.  Registrar supports basic health checking by executing a
+command periodically and unregistering an instance if the command fails too many
+times in too short a period.  However, as of this writing, this mechanism is
+extremely buggy.  See [HEAD-2282](http://smartos.org/bugview/HEAD-2282) and
 [HEAD-2283](http://smartos.org/bugview/HEAD-2283).
+
+**SRV-based discovery:** Many services (like
+[Moray](https://github.com/joyent/moray)) use multiple processes in order to
+make use of more than one CPU.  The recommended way to implement this is to
+configure registrar to publish specific port information.  This allows binder to
+answer queries with SRV records, which allow clients to discover not just
+individual zones, but the specific ports available in those zones.
 
 
 ## Operating Registrar
@@ -150,7 +143,7 @@ component zones.  Incorporating Registrar into a new component usually involves
 only a few steps:
 
 - the component's repository should include a template configuration file,
-  usually in `sapi_manifests/registrar/template` and an associated config-agent
+  usually in "sapi\_manifests/registrar/template" and an associated config-agent
   snippet in the same directory
 - the [Mountain Gorilla](https://github.com/joyent/mountain-gorilla) (build
   system) configuration snippet for this component should depend on the
@@ -164,7 +157,7 @@ itself is templatized by the list of TCP ports that should be exposed.
 
 When new instances (zones) of the component start up, config-agent writes the
 registrar configuration file, populating variables such as the DNS domain suffix
-(`emy-10.joyent.us` in the example above) from the SAPI configuration for the
+("emy-10.joyent.us" in the example above) from the SAPI configuration for the
 current deployment.  After that, Registrar starts up, reads the configuration
 file, and runs through the process described at the top of this README.
 
@@ -177,30 +170,29 @@ file is a JSON object with top-level properties:
 Property         | Type            | Description
 ---------------- | --------------- | -----------
 `"adminIp"`      | optional string | IPv4 address to include in DNS records
-`"registration"` | object          | describes which DNS names should be created
-for this component
 `"zookeeper"`    | object          | describes how to connect to the ZooKeeper cluster
+`"registration"` | object          | describes which DNS names should be created for this component
 
 **Address:**  The address for all DNS answers related to this component is
 whatever is provided by the `"adminIp"` configuration property.  This is the IP
 address used by clients that use DNS to discover this component.  For Triton
-components, this should usually be an addresss on the "admin" network.  For
-Manta components, this should usually be an address on the "manta" network.
-If `"adminIp"` is not specified in the configuration, then Registrar picks an
-up, non-loopback IP address on the system and uses that, but this is not
-recommended.
+components, this should usually be an addresss on the "admin" network (hence the
+name).  For Manta components, this should usually be an address on the "manta"
+network.  If `"adminIp"` is not specified in the configuration, then Registrar
+picks an up, non-loopback IP address on the system and uses that, but this is
+not recommended.
 
 **ZooKeeper configuration:** Service discovery records are maintained in a
 ZooKeeper cluster.  The `"zookeeper"` top-level property describes how to reach
 that cluster.  This should be a configuration block appropriate for
 [node-zkplus](http://github.com/mcavage/node-zkplus).  See that project for
-details, but essentially this needs to have a `"timeout"` and `"servers"`.
-`"servers"` should be an array of objects with `"host"` and `"port"` properties
-identifying the servers in the ZooKeeper cluster.
+details, but essentially this needs to have `"timeout"` and `"servers"`
+properties.  `"servers"` should be an array of objects with `"host"` and
+`"port"` properties identifying the servers in the ZooKeeper cluster.
 
 **Registration:** The `"registration"` object describes the service discovery
 records that will be inserted into ZooKeeper.  These control the DNS names that
-are available for this component.  Broadly, there are broadly types of service
+are available for this component.  Broadly, there are two types of service
 discovery records:
 
 * **Host records** essentially allow Binder to answer DNS "A" and "SRV" queries
@@ -218,19 +210,19 @@ discovery records:
 #### Using host and service records
 
 Let's look at an example.  In Manta, instances of the "authcache" service
-publish host records under $zonename.authcache.$suffix.  As a result, if you
+publish host records under "$zonename.authcache.$suffix".  As a result, if you
 have a Manta deployment whose DNS suffix is "emy-10.joyent.us", you can find the
 IP address for the "authcache" zone that's called
-`a2674d3b-a9c4-46bc-a835-b6ce21d522c2` by looking up
-`a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us`:
+"a2674d3b-a9c4-46bc-a835-b6ce21d522c2" by looking up
+"a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us":
 
     $ dig +nocmd +nocomments +noquestion +nostats a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us
     a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us. 30 IN A 172.27.10.62
 
 We've just looked up the _host record_ for a particular authcache instance.  The
 authcache service also writes a _service record_ for the higher-level DNS name
-`authcache.emy-10.joyent.us`.  This lets clients of the authcache service use
-the DNS name `authcache.emy-10.joyent.us` to find all available authcache
+"authcache.emy-10.joyent.us".  This lets clients of the authcache service use
+the DNS name "authcache.emy-10.joyent.us" to find all available authcache
 instances:
 
     $ dig +nocmd +nocomments +noquestion +nostats authcache.emy-10.joyent.us 
@@ -242,7 +234,7 @@ address for a given DNS name) or service records (when there may be multiple
 interchangeable instances).
 
 
-#### Configuration the registration
+#### Configuring the registration
 
 The `registration` block of the configuration file determines which records are
 created.  This block contains properties:
@@ -254,7 +246,7 @@ Property    | Type                     | Description
 `"type"`    | string                   | the specific subtype of record to use for the host records created for this instance
 `"service"` | optional object          | if present, a service record will be created with properties described by this object (see below)
 
-Registrar creates the following records:
+With this information, Registrar creates the following records:
 
 * A host record is *always* created at `$(hostname).$domain`.  `$(hostname)`
   here is the system's hostname (see hostname(1)) and `$domain` refers to the
@@ -359,7 +351,8 @@ As mentioned above, service records are used for two purposes:
 
 - to indicate that a particular DNS name is served by any of several
   interchangeable instances
-- to provide port information so that Binder can answer SRV queries
+- to provide service, protocol, and port information so that Binder can answer
+  SRV queries
 
 To have Registrar create a service record, specify a `"service"` property under
 the `"registration"` object.  The `"service"` object must have a property
@@ -369,11 +362,11 @@ Property  | Type            | Meaning
 --------- | --------------- | -------------------------------
 `"srvce"` | string          | service to use for SRV answers
 `"proto"` | string          | protocol to use for SRV answers
-`"port"`  | number          | port to use for SRV answers
-`"ttl"`   | optional number | TTL to use for SRV answers
+`"port"`  | number          | port to use for SRV answers _when a child host record does not contain its own array of ports_.
+`"ttl"`   | optional number | TTL to use for SRV answers.  See "Using TTLs" below.
 
 Note that the presence of `"service"` causes Registrar to create a service
-record.  The other fields are required.  So it's not possible to specify a
+record, and the various fields are required, so it's not possible to specify a
 service record without also providing the information required to answer SRV
 queries.
 
@@ -401,23 +394,24 @@ Let's augment the configuration above to specify a service record:
         }
     }
 
-(We also dropped the aliases because those were just for demonstration.)
+(We also dropped the aliases from this example because those were just for
+demonstration.)
 
 With the service configuration in place, we can still look up the IP address
 for a specific instance:
 
-    $ dig b44c74d6.example.joyent.us  +short
+    $ dig b44c74d6.example.joyent.us +short
     172.27.10.72
 
 but we can also list all instances:
 
-    $ dig example.joyent.us  +short
+    $ dig example.joyent.us +short
     172.27.10.72
 
 If we start up another Registrar instance with a similar configuration with IP
 address 172.27.10.73, then we'd get both results:
 
-    $ dig example.joyent.us  +short
+    $ dig example.joyent.us +short
     172.27.10.72
     172.27.10.73
 
@@ -505,7 +499,7 @@ we can connect to any of these instances on some well-known port to use the
 `authcache` service.  How does this work?
 
 When we query Binder for `authcache.emy-10.joyent.us`, assuming the result is
-not cached, Binder fetches the ZooKeeper node at `/us/joyent/emy-10/authcache`.
+not cached, Binder fetches the ZooKeeper node at "/us/joyent/emy-10/authcache".
 There, it finds a service record (with `"type" == "service"`):
 
     {
@@ -526,7 +520,7 @@ Seeing a service record, Binder then _lists_ the children of the ZooKeeper node
 "/us/joyent/emy-10/authcache" to find host records for individual instances of
 the `authcache` service.  (Remember, ZooKeeper's namespace looks like a
 filesystem, but the nodes that you'd think of as directories can themselves also
-contain data.  In this case, the _data_ at `/us/joyent/emy-10/authcache` is the
+contain data.  In this case, the _data_ at "/us/joyent/emy-10/authcache" is the
 service record.  The child nodes in that directory describe the specific
 instances.)  In this example, that includes two instances:
 
@@ -569,11 +563,11 @@ service uses.
 
 Note that clients can also query for the host records directly:
 
-   $ dig +nocmd +nocomments +noquestion +nostats a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us
+    $ dig +nocmd +nocomments +noquestion +nostats a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us
     a2674d3b-a9c4-46bc-a835-b6ce21d522c2.authcache.emy-10.joyent.us. 30 IN A 172.27.10.62
 
 In this case, Binder answers the query by fetching the ZooKeeper node
-`/us/joyent/emy-10/authcache/a2674d3b-a9c4-46bc-a835-b6ce21d522c2`, finding the
+"/us/joyent/emy-10/authcache/a2674d3b-a9c4-46bc-a835-b6ce21d522c2", finding the
 host record there, and producing an "A" record.  The service record is not
 involved here.
 
